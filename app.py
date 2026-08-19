@@ -231,6 +231,40 @@ def styled_fig(title=""):
     return fig
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIX 1: Fallback data generator — ensures df_raw is NEVER None even if the
+#        sample CSV is missing or st.stop() fails in bare-mode deployments.
+# ═══════════════════════════════════════════════════════════════════════════════
+def generate_sample_data():
+    """Generate synthetic IoT sensor data with ~20% missing values."""
+    np.random.seed(42)
+    n = 50
+    t = np.arange(n, dtype=float)
+    temp = 20 + 5 * np.sin(2 * np.pi * t / 24) + np.random.normal(0, 0.5, n)
+    humid = 50 + 10 * np.cos(2 * np.pi * t / 24) + np.random.normal(0, 1, n)
+    pressure = 1013 + 3 * np.sin(2 * np.pi * t / 48) + np.random.normal(0, 0.3, n)
+    df = pd.DataFrame({
+        'time': t,
+        'temperature': np.round(temp, 2),
+        'humidity': np.round(humid, 2),
+        'pressure': np.round(pressure, 2),
+    })
+    for col in ['temperature', 'humidity', 'pressure']:
+        mask = np.random.random(n) < 0.2
+        df.loc[mask, col] = np.nan
+    return df
+
+
+@st.cache_data
+def load_sample():
+    """Load sample CSV; fall back to generated data if file is absent (deployment-safe)."""
+    path = os.path.join(os.path.dirname(__file__), "sample_data", "sensor_data_with_missing.csv")
+    try:
+        return pd.read_csv(path)
+    except (FileNotFoundError, OSError):
+        return generate_sample_data()
+
+
 # ─────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────
@@ -250,10 +284,11 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown('<p class="section-title">📂 Data Source</p>', unsafe_allow_html=True)
-    
+
+    # FIX 2: Default to "Use Sample Dataset" so the app always has data on first load
     data_source = st.radio(
         "Choose input:",
-        ["Upload CSV", "Use Sample Dataset"],
+        ["Use Sample Dataset", "Upload CSV"],
         label_visibility="collapsed"
     )
 
@@ -264,10 +299,10 @@ with st.sidebar:
             type=["csv"],
             help="Needs a numeric index/X column + one or more value columns with NaN gaps."
         )
-    
+
     st.markdown("---")
     st.markdown('<p class="section-title">⚙️ Settings</p>', unsafe_allow_html=True)
-    
+
     selected_methods = st.multiselect(
         "Methods to compare",
         list(METHODS.keys()),
@@ -302,25 +337,25 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────
-# LOAD DATA
+# LOAD DATA  — with try/except for deployment safety
 # ─────────────────────────────────────────────
-@st.cache_data
-def load_sample():
-    path = os.path.join(os.path.dirname(__file__), "sample_data", "sensor_data_with_missing.csv")
-    return pd.read_csv(path)
-
 df_raw = None
 
 if data_source == "Use Sample Dataset":
-    df_raw = load_sample()
-    st.markdown("""
-    <div class="info-box">
-        📡 <b>Sample Dataset</b>: IoT sensor readings (temperature, humidity, pressure) over 50 time steps with ~20% missing values introduced randomly. 
-        This simulates real sensor drop-out scenarios.
-    </div>
-    """, unsafe_allow_html=True)
-elif uploaded_file is not None:
-    df_raw = pd.read_csv(uploaded_file)
+    try:
+        df_raw = load_sample()
+    except Exception as e:
+        st.error(f"Error loading sample data: {e}")
+        df_raw = generate_sample_data()
+elif data_source == "Upload CSV":
+    if uploaded_file is not None:
+        try:
+            df_raw = pd.read_csv(uploaded_file)
+        except Exception as e:
+            st.error(f"Error reading CSV file: {e}")
+    else:
+        st.info("👆 Please upload a CSV file to begin.")
+
 
 # ─────────────────────────────────────────────
 # MAIN APP
@@ -338,7 +373,7 @@ if df_raw is None:
             st.markdown(f"""
             <div class="metric-card" style="padding:2rem; text-align:center;">
                 <div style="font-size:2.5rem;">{icon}</div>
-                <div style="font-family:'Syne',sans-serif; font-weight:700; font-size:1rem; 
+                <div style="font-family:'Syne',sans-serif; font-weight:700; font-size:1rem;
                             color:#e2e8f0; margin:0.8rem 0 0.4rem;">{title}</div>
                 <div style="font-size:0.8rem; color:#475569; line-height:1.6;">{desc}</div>
             </div>
@@ -347,12 +382,23 @@ if df_raw is None:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""
     <div class="info-box">
-        💡 <b>Quick Start</b>: Select <b>"Use Sample Dataset"</b> from the sidebar to explore immediately, 
+        💡 <b>Quick Start</b>: Select <b>"Use Sample Dataset"</b> from the sidebar to explore immediately,
         or upload your own CSV to analyze your data.
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
+    # ════════════════════════════════════════════════════════════════════════
+    # FIX 3 (CRITICAL): If st.stop() was a no-op (bare-mode / missing
+    # ScriptRunContext in certain Docker/cloud deployments), execution falls
+    # through to here.  Inject fallback data so we never hit AttributeError.
+    # ════════════════════════════════════════════════════════════════════════
+    df_raw = generate_sample_data()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Everything below this point is guaranteed to have df_raw ≠ None
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # ─── Detect columns ────────────────────────────────────────────────────────
 numeric_cols = df_raw.select_dtypes(include=[np.number]).columns.tolist()
@@ -472,7 +518,7 @@ with tabs[0]:
                 continue
             filled = method_results[method_name]
             color = PLOT_COLORS[i % len(PLOT_COLORS)]
-            
+
             # Draw the line
             fig.add_trace(go.Scatter(
                 x=x_vals, y=filled.values,
@@ -499,7 +545,7 @@ with tabs[0]:
         n_missing = missing_mask.sum()
         st.markdown(f"""
         <div class="info-box">
-            ✅ <b>{n_missing} missing value(s)</b> recovered in <i>{y_col}</i> using 
+            ✅ <b>{n_missing} missing value(s)</b> recovered in <i>{y_col}</i> using
             {len(selected_methods)} method(s). Diamond markers show the filled positions.
         </div>
         """, unsafe_allow_html=True)
@@ -514,17 +560,17 @@ with tabs[1]:
     else:
         st.markdown("""
         <div class="info-box">
-            📐 <b>How it works</b>: We hide 20% of the <i>known</i> values, run each method, then compare 
+            📐 <b>How it works</b>: We hide 20% of the <i>known</i> values, run each method, then compare
             predictions vs actual to compute MAE and RMSE. Lower = better.
         </div>
         """, unsafe_allow_html=True)
 
         for y_col in y_cols:
             st.markdown(f'<p class="section-title">Error Metrics — {y_col}</p>', unsafe_allow_html=True)
-            
+
             series_orig = df_raw.set_index(x_col)[y_col]
             metrics_df = evaluate_methods(series_orig, all_results[y_col])
-            
+
             if metrics_df.empty:
                 st.warning("Not enough known values for error analysis (need ≥ 10).")
                 continue
@@ -532,7 +578,7 @@ with tabs[1]:
             # Bar chart
             fig_err = styled_fig("MAE & RMSE by Method")
             methods_list = metrics_df["Method"].tolist()
-            
+
             fig_err.add_trace(go.Bar(
                 name="MAE", x=methods_list, y=metrics_df["MAE"],
                 marker_color=PLOT_COLORS[0], opacity=0.85,
@@ -562,11 +608,11 @@ with tabs[1]:
                 best_rmse = metrics_df.iloc[0]["RMSE"]
                 st.markdown(f"""
                 <div class="best-method">
-                    <div style="font-family:'Space Mono',monospace; font-size:0.7rem; 
+                    <div style="font-family:'Space Mono',monospace; font-size:0.7rem;
                                 color:#22c55e; text-transform:uppercase; letter-spacing:0.1em;">
                         🏆 Best Method
                     </div>
-                    <div style="font-family:'Syne',sans-serif; font-weight:800; 
+                    <div style="font-family:'Syne',sans-serif; font-weight:800;
                                 font-size:1.4rem; color:#e2e8f0; margin:0.5rem 0;">
                         {best}
                     </div>
@@ -686,7 +732,7 @@ with tabs[3]:
             with col_b:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div style="font-family:'Space Mono',monospace; font-size:0.75rem; 
+                    <div style="font-family:'Space Mono',monospace; font-size:0.75rem;
                                 color:#38bdf8;">Time Complexity</div>
                     <div style="font-size:1.1rem; font-weight:700; color:#e2e8f0; margin:0.5rem 0;">
                         {info['complexity']}
@@ -696,8 +742,8 @@ with tabs[3]:
 
     st.markdown("""
     <div class="info-box" style="margin-top:2rem;">
-        🔬 <b>Research Directions</b>: Compare methods on your data's characteristics (smoothness, sampling rate, 
-        noise level). Investigate how polynomial degree affects Runge's phenomenon. Study error propagation 
+        🔬 <b>Research Directions</b>: Compare methods on your data's characteristics (smoothness, sampling rate,
+        noise level). Investigate how polynomial degree affects Runge's phenomenon. Study error propagation
         in Newton's Divided Differences. Explore adaptive splines for non-uniform data.
     </div>
     """, unsafe_allow_html=True)
