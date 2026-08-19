@@ -126,20 +126,6 @@ html, body, [class*="css"] {
     margin-bottom: 1rem;
 }
 
-/* Method badge */
-.method-badge {
-    display: inline-block;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
-    font-weight: 700;
-    background: rgba(56,189,248,0.1);
-    border: 1px solid rgba(56,189,248,0.3);
-    color: #38bdf8;
-    margin: 0.15rem;
-}
-
 /* Best method highlight */
 .best-method {
     background: linear-gradient(135deg, rgba(34,197,94,0.1), rgba(56,189,248,0.1));
@@ -185,12 +171,6 @@ div[data-testid="stSlider"] label {
     box-shadow: 0 8px 25px rgba(14,165,233,0.3) !important;
 }
 
-div[data-testid="stDataFrame"] {
-    border: 1px solid rgba(56,189,248,0.15);
-    border-radius: 10px;
-    overflow: hidden;
-}
-
 .stTabs [data-baseweb="tab"] {
     font-family: 'Space Mono', monospace !important;
     font-size: 0.8rem !important;
@@ -231,10 +211,9 @@ def styled_fig(title=""):
     return fig
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# FIX 1: Fallback data generator — ensures df_raw is NEVER None even if the
-#        sample CSV is missing or st.stop() fails in bare-mode deployments.
-# ═══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────
+# DATA GENERATION & LOADING (Deployment Safe)
+# ─────────────────────────────────────────────
 def generate_sample_data():
     """Generate synthetic IoT sensor data with ~20% missing values."""
     np.random.seed(42)
@@ -254,10 +233,9 @@ def generate_sample_data():
         df.loc[mask, col] = np.nan
     return df
 
-
 @st.cache_data
 def load_sample():
-    """Load sample CSV; fall back to generated data if file is absent (deployment-safe)."""
+    """Load sample CSV; fall back to generated data if file is absent."""
     path = os.path.join(os.path.dirname(__file__), "sample_data", "sensor_data_with_missing.csv")
     try:
         return pd.read_csv(path)
@@ -284,8 +262,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown('<p class="section-title">📂 Data Source</p>', unsafe_allow_html=True)
-
-    # FIX 2: Default to "Use Sample Dataset" so the app always has data on first load
+    
     data_source = st.radio(
         "Choose input:",
         ["Use Sample Dataset", "Upload CSV"],
@@ -299,10 +276,10 @@ with st.sidebar:
             type=["csv"],
             help="Needs a numeric index/X column + one or more value columns with NaN gaps."
         )
-
+    
     st.markdown("---")
     st.markdown('<p class="section-title">⚙️ Settings</p>', unsafe_allow_html=True)
-
+    
     selected_methods = st.multiselect(
         "Methods to compare",
         list(METHODS.keys()),
@@ -337,7 +314,7 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────
-# LOAD DATA  — with try/except for deployment safety
+# LOAD DATA
 # ─────────────────────────────────────────────
 df_raw = None
 
@@ -361,7 +338,6 @@ elif data_source == "Upload CSV":
 # MAIN APP
 # ─────────────────────────────────────────────
 if df_raw is None:
-    # Landing / instructions
     col1, col2, col3 = st.columns(3)
     cards = [
         ("📤", "Upload Your Data", "CSV with any numeric columns. Missing values as blank or NaN."),
@@ -373,7 +349,7 @@ if df_raw is None:
             st.markdown(f"""
             <div class="metric-card" style="padding:2rem; text-align:center;">
                 <div style="font-size:2.5rem;">{icon}</div>
-                <div style="font-family:'Syne',sans-serif; font-weight:700; font-size:1rem;
+                <div style="font-family:'Syne',sans-serif; font-weight:700; font-size:1rem; 
                             color:#e2e8f0; margin:0.8rem 0 0.4rem;">{title}</div>
                 <div style="font-size:0.8rem; color:#475569; line-height:1.6;">{desc}</div>
             </div>
@@ -382,23 +358,13 @@ if df_raw is None:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""
     <div class="info-box">
-        💡 <b>Quick Start</b>: Select <b>"Use Sample Dataset"</b> from the sidebar to explore immediately,
+        💡 <b>Quick Start</b>: Select <b>"Use Sample Dataset"</b> from the sidebar to explore immediately, 
         or upload your own CSV to analyze your data.
     </div>
     """, unsafe_allow_html=True)
     st.stop()
-
-    # ════════════════════════════════════════════════════════════════════════
-    # FIX 3 (CRITICAL): If st.stop() was a no-op (bare-mode / missing
-    # ScriptRunContext in certain Docker/cloud deployments), execution falls
-    # through to here.  Inject fallback data so we never hit AttributeError.
-    # ════════════════════════════════════════════════════════════════════════
     df_raw = generate_sample_data()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Everything below this point is guaranteed to have df_raw ≠ None
-# ═══════════════════════════════════════════════════════════════════════════════
 
 # ─── Detect columns ────────────────────────────────────────────────────────
 numeric_cols = df_raw.select_dtypes(include=[np.number]).columns.tolist()
@@ -429,11 +395,10 @@ for col_w, val, label in zip(
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Show raw data preview
 with st.expander("👁️ Preview Raw Data", expanded=False):
     st.dataframe(
-        df_raw.style.highlight_null(color="rgba(239,68,68,0.2)"),
-        use_container_width=True,
+        df_raw,
+        width="stretch",
         height=250
     )
 
@@ -464,7 +429,7 @@ if not selected_methods:
     st.warning("Select at least one method from the sidebar.")
     st.stop()
 
-all_results = {}  # {y_col: {method: filled_series}}
+all_results = {} 
 
 for y_col in y_cols:
     series = df_raw.set_index(x_col)[y_col]
@@ -489,7 +454,6 @@ with tabs[0]:
 
         fig = styled_fig(f"Interpolation Comparison — {y_col}")
 
-        # Original known points
         known_mask = series_orig.notna()
         fig.add_trace(go.Scatter(
             x=x_vals[known_mask], y=series_orig[known_mask],
@@ -500,7 +464,6 @@ with tabs[0]:
             zorder=10,
         ))
 
-        # Missing point positions
         missing_mask = series_orig.isna()
         if missing_mask.any():
             fig.add_trace(go.Scatter(
@@ -511,15 +474,13 @@ with tabs[0]:
                 name="Missing (position)",
             ))
 
-        # Each interpolation method
         method_results = all_results[y_col]
         for i, method_name in enumerate(selected_methods):
             if method_name not in method_results:
                 continue
             filled = method_results[method_name]
             color = PLOT_COLORS[i % len(PLOT_COLORS)]
-
-            # Draw the line
+            
             fig.add_trace(go.Scatter(
                 x=x_vals, y=filled.values,
                 mode="lines",
@@ -527,7 +488,6 @@ with tabs[0]:
                 name=method_name,
                 opacity=0.8,
             ))
-            # Highlight filled-in points
             if missing_mask.any():
                 fig.add_trace(go.Scatter(
                     x=x_vals[missing_mask], y=filled[missing_mask].values,
@@ -539,13 +499,12 @@ with tabs[0]:
                 ))
 
         fig.update_layout(height=420)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
-        # Missing count info
         n_missing = missing_mask.sum()
         st.markdown(f"""
         <div class="info-box">
-            ✅ <b>{n_missing} missing value(s)</b> recovered in <i>{y_col}</i> using
+            ✅ <b>{n_missing} missing value(s)</b> recovered in <i>{y_col}</i> using 
             {len(selected_methods)} method(s). Diamond markers show the filled positions.
         </div>
         """, unsafe_allow_html=True)
@@ -560,25 +519,24 @@ with tabs[1]:
     else:
         st.markdown("""
         <div class="info-box">
-            📐 <b>How it works</b>: We hide 20% of the <i>known</i> values, run each method, then compare
+            📐 <b>How it works</b>: We hide 20% of the <i>known</i> values, run each method, then compare 
             predictions vs actual to compute MAE and RMSE. Lower = better.
         </div>
         """, unsafe_allow_html=True)
 
         for y_col in y_cols:
             st.markdown(f'<p class="section-title">Error Metrics — {y_col}</p>', unsafe_allow_html=True)
-
+            
             series_orig = df_raw.set_index(x_col)[y_col]
             metrics_df = evaluate_methods(series_orig, all_results[y_col])
-
+            
             if metrics_df.empty:
                 st.warning("Not enough known values for error analysis (need ≥ 10).")
                 continue
 
-            # Bar chart
             fig_err = styled_fig("MAE & RMSE by Method")
             methods_list = metrics_df["Method"].tolist()
-
+            
             fig_err.add_trace(go.Bar(
                 name="MAE", x=methods_list, y=metrics_df["MAE"],
                 marker_color=PLOT_COLORS[0], opacity=0.85,
@@ -592,27 +550,24 @@ with tabs[1]:
                 textfont=dict(color="#e2e8f0", size=10)
             ))
             fig_err.update_layout(barmode="group", height=380)
-            st.plotly_chart(fig_err, use_container_width=True)
+            st.plotly_chart(fig_err, width="stretch")
 
-            # Table
             col_tbl, col_winner = st.columns([2, 1])
             with col_tbl:
                 st.dataframe(
-                    metrics_df.set_index("Method").style
-                        .background_gradient(cmap="Blues_r", subset=["RMSE"])
-                        .format("{:.4f}"),
-                    use_container_width=True
+                    metrics_df.set_index("Method").round(4),
+                    width="stretch"
                 )
             with col_winner:
                 best = metrics_df.iloc[0]["Method"]
                 best_rmse = metrics_df.iloc[0]["RMSE"]
                 st.markdown(f"""
                 <div class="best-method">
-                    <div style="font-family:'Space Mono',monospace; font-size:0.7rem;
+                    <div style="font-family:'Space Mono',monospace; font-size:0.7rem; 
                                 color:#22c55e; text-transform:uppercase; letter-spacing:0.1em;">
                         🏆 Best Method
                     </div>
-                    <div style="font-family:'Syne',sans-serif; font-weight:800;
+                    <div style="font-family:'Syne',sans-serif; font-weight:800; 
                                 font-size:1.4rem; color:#e2e8f0; margin:0.5rem 0;">
                         {best}
                     </div>
@@ -631,7 +586,6 @@ with tabs[2]:
 
     method_choice = st.selectbox("Select method for export:", selected_methods)
 
-    # Build the filled DataFrame
     df_filled = df_raw.copy()
     for y_col in y_cols:
         filled_series = all_results[y_col][method_choice]
@@ -639,19 +593,22 @@ with tabs[2]:
             dict(zip(filled_series.index.astype(float), filled_series.values))
         ).fillna(df_raw[y_col])
 
-    # Show side by side
     col_orig, col_fill = st.columns(2)
     with col_orig:
         st.markdown("**Original (with NaN)**")
         st.dataframe(
-            df_raw[y_cols].style.highlight_null(color="rgba(239,68,68,0.15)"),
-            height=300, use_container_width=True
+            df_raw[y_cols],
+            height=300, 
+            width="stretch"
         )
     with col_fill:
         st.markdown(f"**After {method_choice} interpolation**")
-        st.dataframe(df_filled[y_cols], height=300, use_container_width=True)
+        st.dataframe(
+            df_filled[y_cols], 
+            height=300, 
+            width="stretch"
+        )
 
-    # Download
     csv_buffer = io.StringIO()
     df_filled.to_csv(csv_buffer, index=False)
     st.download_button(
@@ -667,8 +624,9 @@ with tabs[2]:
         for y_col in y_cols:
             diff_df[y_col] = (df_filled[y_col] - df_raw[y_col]).round(4)
         st.dataframe(
-            diff_df.style.background_gradient(cmap="RdYlGn", axis=None),
-            use_container_width=True, height=250
+            diff_df,
+            width="stretch", 
+            height=250
         )
 
 
@@ -732,7 +690,7 @@ with tabs[3]:
             with col_b:
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div style="font-family:'Space Mono',monospace; font-size:0.75rem;
+                    <div style="font-family:'Space Mono',monospace; font-size:0.75rem; 
                                 color:#38bdf8;">Time Complexity</div>
                     <div style="font-size:1.1rem; font-weight:700; color:#e2e8f0; margin:0.5rem 0;">
                         {info['complexity']}
@@ -742,8 +700,8 @@ with tabs[3]:
 
     st.markdown("""
     <div class="info-box" style="margin-top:2rem;">
-        🔬 <b>Research Directions</b>: Compare methods on your data's characteristics (smoothness, sampling rate,
-        noise level). Investigate how polynomial degree affects Runge's phenomenon. Study error propagation
+        🔬 <b>Research Directions</b>: Compare methods on your data's characteristics (smoothness, sampling rate, 
+        noise level). Investigate how polynomial degree affects Runge's phenomenon. Study error propagation 
         in Newton's Divided Differences. Explore adaptive splines for non-uniform data.
     </div>
     """, unsafe_allow_html=True)
